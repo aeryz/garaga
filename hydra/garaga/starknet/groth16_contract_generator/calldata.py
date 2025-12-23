@@ -1,5 +1,7 @@
 from garaga import garaga_rs
+from garaga.hints import io
 from garaga.points import G1G2Pair, G1Point
+from garaga.modulo_circuit_structs import G2Line, StructArray
 from garaga.starknet.groth16_contract_generator.parsing_utils import (
     Groth16Proof,
     Groth16VerifyingKey,
@@ -18,7 +20,7 @@ def groth16_calldata_from_vk_and_proof(
         vk.curve_id == proof.curve_id
     ), f"Curve ID mismatch: {vk.curve_id} != {proof.curve_id}"
 
-    vk_x = vk.ic[0].add(G1Point.msm(vk.ic[1:], proof.public_inputs))
+    vk_x = vk.ic[0].add(proof.commitments[0]).add(G1Point.msm(vk.ic[1:], proof.public_inputs))
 
     calldata = []
 
@@ -33,8 +35,36 @@ def groth16_calldata_from_vk_and_proof(
         public_pair=G1G2Pair(vk.alpha, vk.beta, vk.curve_id),
     )
 
+    mpc_pok = MPCheckCalldataBuilder(
+        vk.curve_id,
+        pairs = [
+            G1G2Pair(p=proof.commitments[0], q=vk.commitment_key_g, curve_id=vk.curve_id),
+            G1G2Pair(p=proof.commitment_pok, q=vk.commitment_key_g_root_sigma_neg, curve_id=vk.curve_id),
+        ],
+        n_fixed_g2=2,
+        public_pair=None
+    )
+    # lines = mpc_pok.lines()
+    # precomputed_lines = StructArray(
+    #     name="lines",
+    #     elmts=[
+    #         G2Line(name=f"line{i}", elmts=lines[i : i + 4])
+    #         for i in range(0, len(lines), 4)
+    #     ],
+    # )
+    # constants_code = f"""
+    # pub const precomputed_lines: [G2Line; {len(precomputed_lines)//4}] = {precomputed_lines.serialize(raw=True, const=True)};
+    # """;
+    # print(constants_code)
+
+
     calldata.extend(proof.serialize_to_calldata())
+    calldata.extend(io.bigint_split(proof.commitments[0].x))
+    calldata.extend(io.bigint_split(proof.commitments[0].y))
+    calldata.extend(io.bigint_split(proof.commitment_pok.x))
+    calldata.extend(io.bigint_split(proof.commitment_pok.y))
     calldata.extend(mpc.serialize_to_calldata())
+    calldata.extend(mpc_pok.serialize_to_calldata())
 
     if proof.image_id and proof.journal:
         # Risc0 mode.

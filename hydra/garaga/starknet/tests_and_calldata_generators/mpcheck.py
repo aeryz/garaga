@@ -264,6 +264,7 @@ class MPCheckCalldataBuilder:
             assert ci == c1 ** (n_relations_with_ci - i)
 
         big_Q_coeffs = big_Q.get_coeffs()
+        print("expected, ", self.big_Q_expected_len)
         big_Q_coeffs.extend(
             [self.field.zero()] * (self.big_Q_expected_len - len(big_Q_coeffs))
         )
@@ -297,6 +298,12 @@ class MPCheckCalldataBuilder:
             ]
         else:
             hint_struct_list_init = []
+
+        i = 0
+        for i, Ri in enumerate(passed_Ris):
+            i += 1
+        print("ris", i)
+        print("big_q", len(big_Q_coeffs))
 
         return structs.Struct(
             struct_name=f"MPCheckHint{self.curve_id.name}",

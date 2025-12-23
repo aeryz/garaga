@@ -186,6 +186,8 @@ class Groth16VerifyingKey:
     gamma: G2Point
     delta: G2Point
     ic: List[G1Point]
+    commitment_key_g : G2Point
+    commitment_key_g_root_sigma_neg: G2Point
 
     def __post_init__(self):
         assert (
@@ -199,6 +201,8 @@ class Groth16VerifyingKey:
             == self.beta.curve_id
             == self.gamma.curve_id
             == self.delta.curve_id
+            == self.commitment_key_g.curve_id
+            == self.commitment_key_g_root_sigma_neg.curve_id
         ), "All points must be on the same curve."
         assert all(point.curve_id == self.alpha.curve_id for point in self.ic)
 
@@ -234,6 +238,7 @@ class Groth16VerifyingKey:
                 # Gnark case.
                 g1_points = find_item_from_key_patterns(verifying_key, ["g1"])
                 g2_points = find_item_from_key_patterns(verifying_key, ["g2"])
+                commitment_key = find_item_from_key_patterns(verifying_key, ["CommitmentKey"])
                 return Groth16VerifyingKey(
                     alpha=try_parse_g1_point_from_key(g1_points, ["alpha"], curve_id),
                     beta=try_parse_g2_point_from_key(g2_points, ["beta"], curve_id),
@@ -243,6 +248,8 @@ class Groth16VerifyingKey:
                         try_parse_g1_point(point, curve_id)
                         for point in find_item_from_key_patterns(g1_points, ["K"])
                     ],
+                    commitment_key_g=try_parse_g2_point_from_key(commitment_key, ["G"], curve_id),
+                    commitment_key_g_root_sigma_neg=try_parse_g2_point_from_key(commitment_key, ["GRootSigmaNeg"], curve_id)
                 )
         except KeyError as e:
             raise KeyError(f"The key {e} is missing from the JSON data.")
@@ -321,6 +328,8 @@ class Groth16Proof:
     a: G1Point
     b: G2Point
     c: G1Point
+    commitment_pok: G1Point
+    commitments: List[G1Point] = dataclasses.field(default_factory=list)
     public_inputs: List[int] = dataclasses.field(default_factory=list)
     curve_id: CurveID = None
     image_id: bytes = None  # Only used for risc0 proofs
@@ -421,6 +430,11 @@ class Groth16Proof:
             a=try_parse_g1_point_from_key(proof, ["a"], curve_id),
             b=try_parse_g2_point_from_key(proof, ["b"], curve_id),
             c=try_parse_g1_point_from_key(proof, ["c", "Krs"], curve_id),
+            commitments=[
+                try_parse_g1_point(point, curve_id)
+                for point in find_item_from_key_patterns(proof, ["Commitments"])
+            ],
+            commitment_pok=try_parse_g1_point_from_key(proof, ["CommitmentPok"], curve_id),
             public_inputs=[io.to_int(pub) for pub in public_inputs],
         )
 
