@@ -371,7 +371,7 @@ pub fn get_groth16_calldata(
     Ok(calldata)
 }
 
-fn calculate_vk_x(
+pub(crate) fn calculate_vk_x(
     vk: &Groth16VerificationKey,
     pub_inputs: &[BigUint],
     curve_id: CurveID,

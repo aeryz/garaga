@@ -3,6 +3,7 @@ pub mod full_proof_with_hints {
     pub mod groth16;
     pub mod zk_honk;
 }
+pub mod cometbls_groth16;
 pub mod mpc_calldata;
 pub mod msm_calldata;
 pub mod signatures;
