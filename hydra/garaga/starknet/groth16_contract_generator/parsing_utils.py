@@ -239,6 +239,10 @@ class Groth16VerifyingKey:
                 g1_points = find_item_from_key_patterns(verifying_key, ["g1"])
                 g2_points = find_item_from_key_patterns(verifying_key, ["g2"])
                 commitment_key = find_item_from_key_patterns(verifying_key, ["CommitmentKey"])
+                try:
+                    commitment_key = commitment_key[0]
+                except Error:
+                    pass
                 return Groth16VerifyingKey(
                     alpha=try_parse_g1_point_from_key(g1_points, ["alpha"], curve_id),
                     beta=try_parse_g2_point_from_key(g2_points, ["beta"], curve_id),
@@ -249,7 +253,7 @@ class Groth16VerifyingKey:
                         for point in find_item_from_key_patterns(g1_points, ["K"])
                     ],
                     commitment_key_g=try_parse_g2_point_from_key(commitment_key, ["G"], curve_id),
-                    commitment_key_g_root_sigma_neg=try_parse_g2_point_from_key(commitment_key, ["GRootSigmaNeg"], curve_id)
+                    commitment_key_g_root_sigma_neg=try_parse_g2_point_from_key(commitment_key, ["GRootSigmaNeg", "GSigmaNeg"], curve_id)
                 )
         except KeyError as e:
             raise KeyError(f"The key {e} is missing from the JSON data.")
