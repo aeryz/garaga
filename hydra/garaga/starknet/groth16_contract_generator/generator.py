@@ -32,6 +32,20 @@ def precompute_lines_from_vk(vk: Groth16VerifyingKey) -> StructArray:
 
     return precomputed_lines
 
+def precompute_lines_from_vk_groth16(vk: Groth16VerifyingKey) -> (StructArray, StructArray):
+
+    # Precompute lines for fixed G2 points
+    lines = precompute_lines([vk.commitment_key_g, vk.commitment_key_g_root_sigma_neg])
+    precomputed_lines = StructArray(
+        name="lines",
+        elmts=[
+            G2Line(name=f"line{i}", elmts=lines[i : i + 4])
+            for i in range(0, len(lines), 4)
+        ],
+    )
+
+    return precompute_lines_from_vk(vk), precomputed_lines
+
 
 def gen_test_file(
     contract_name: str,
@@ -343,7 +357,7 @@ def gen_groth16_verifier(
         output_folder_name = output_folder_name + f"_{curve_id.name.lower()}"
     output_folder_path = os.path.join(output_folder_path, output_folder_name)
 
-    precomputed_lines = precompute_lines_from_vk(vk)
+    precomputed_lines, commitment_precomputed_lines = precompute_lines_from_vk_groth16(vk)
     verification_function_name = f"verify_groth16_proof_{curve_id.name.lower()}"
     contract_cairo_name = f"Groth16Verifier{curve_id.name}"
     constants_code = f"""
@@ -354,9 +368,24 @@ def gen_groth16_verifier(
     pub const N_PUBLIC_INPUTS:usize = {len(vk.ic)-1};
     {vk.serialize_to_cairo()}
     pub const precomputed_lines: [G2Line; {len(precomputed_lines)//4}] = {precomputed_lines.serialize(raw=True, const=True)};
+    pub const commitment_precomputed_lines: [G2Line; {len(commitment_precomputed_lines)//4}] = {commitment_precomputed_lines.serialize(raw=True, const=True)};
     """
+    print(constants_code)
     contract_code = f"""
-use super::groth16_verifier_constants::{{N_PUBLIC_INPUTS, vk, ic, precomputed_lines}};
+use garaga::definitions::G1Point;
+use garaga::groth16::Groth16Proof;
+use super::groth16_verifier_constants::{{N_PUBLIC_INPUTS, vk, ic, precomputed_lines, commitment_precomputed_lines, pedersen_g, pedersen_g_root_sigma_neg}};
+use garaga::pairing_check::MPCheckHintBN254;
+
+#[derive(Drop)]
+pub struct FullProofWithHints {{
+    pub groth16_proof: Groth16Proof,
+    pub proof_commitment: G1Point,
+    pub proof_commitment_pok: G1Point,
+    pub mpcheck_hint: MPCheckHintBN254,
+    pub msm_hint: Span<felt252>,
+    pub commitment_mpcheck_hint: MPCheckHintBN254,
+}}
 
 #[starknet::interface]
 pub trait I{contract_cairo_name}<TContractState> {{
@@ -368,12 +397,16 @@ pub trait I{contract_cairo_name}<TContractState> {{
 
 #[starknet::contract]
 mod {contract_cairo_name} {{
+    use core::circuit::u384;
     use starknet::SyscallResultTrait;
-    use garaga::definitions::{{G1Point, G1G2Pair}};
+    #[feature("bounded-int-utils")]
+    use core::internal::bounded_int::downcast;
+    use garaga::definitions::{{E12D, G1Point, G1G2Pair, u288}};
     use garaga::groth16::{{multi_pairing_check_{curve_id.name.lower()}_3P_2F_with_extra_miller_loop_result, Groth16ProofRawTrait}};
     use garaga::ec_ops::{{G1PointTrait, ec_safe_add}};
-    use garaga::utils::calldata::{{deserialize_full_proof_with_hints_{curve_id.name.lower()}}};
-    use super::{{N_PUBLIC_INPUTS, vk, ic, precomputed_lines}};
+    use garaga::utils::calldata::{{_deserialize_E12D_u288, _deserialize_groth16_proof_points}};
+    use garaga::pairing_check::{{MillerLoopResultScalingFactor, multi_pairing_check_bn254_2P_2F}};
+    use super::{{FullProofWithHints, Groth16Proof, N_PUBLIC_INPUTS, vk, ic, precomputed_lines, commitment_precomputed_lines, pedersen_g, pedersen_g_root_sigma_neg, MPCheckHintBN254}};
 
     const ECIP_OPS_CLASS_HASH: felt252 = {hex(ecip_class_hash)};
 
@@ -394,6 +427,7 @@ mod {contract_cairo_name} {{
             let groth16_proof = fph.groth16_proof;
             let mpcheck_hint = fph.mpcheck_hint;
             let msm_hint = fph.msm_hint;
+            let mut commitment_mpcheck_hint = fph.commitment_mpcheck_hint;
 
             groth16_proof.raw.check_proof_points({curve_id.value});
 
@@ -438,12 +472,242 @@ mod {contract_cairo_name} {{
                 precomputed_lines.span(),
                 mpcheck_hint,
             );
+            let res = multi_pairing_check_bn254_2P_2F(
+                G1G2Pair {{ p: fph.proof_commitment, q: pedersen_g }},
+                G1G2Pair {{ p: fph.proof_commitment_pok, q: pedersen_g_root_sigma_neg }},
+                commitment_precomputed_lines.span(),
+                commitment_mpcheck_hint,
+            )?;
+
+            if !res {{
+                return Result::Err('PAIRING_CHECK_FAILED');
+            }}
+
             match check {{
                 Result::Ok(_) => Result::Ok(groth16_proof.public_inputs),
                 Result::Err(error) => Result::Err(error),
             }}
         }}
     }}
+
+    #[inline(always)]
+    fn downcast_u288(l0: felt252, l1: felt252, l2: felt252) -> u288 {{
+        u288 {{
+            limb0: downcast(l0).unwrap(),
+            limb1: downcast(l1).unwrap(),
+            limb2: downcast(l2).unwrap(),
+        }}
+    }}
+
+    #[inline(always)]
+    fn downcast_u384(l0: felt252, l1: felt252, l2: felt252, l3: felt252) -> u384 {{
+        u384 {{
+            limb0: downcast(l0).unwrap(),
+            limb1: downcast(l1).unwrap(),
+            limb2: downcast(l2).unwrap(),
+            limb3: downcast(l3).unwrap(),
+        }}
+    }}
+
+    #[inline(always)]
+    pub fn deserialize_full_proof_with_hints_bn254(mut serialized: Span<felt252>) -> FullProofWithHints {{
+        let groth16_proof_raw = _deserialize_groth16_proof_points(ref serialized);
+
+        let n_public_inputs: u32 = (*serialized.pop_front().unwrap()).try_into().unwrap();
+        let mut public_inputs = array![];
+        for _ in 0..n_public_inputs {{
+            public_inputs
+                .append(
+                    u256 {{
+                        low: (*serialized.pop_front().unwrap()).try_into().unwrap(),
+                        high: (*serialized.pop_front().unwrap()).try_into().unwrap(),
+                    }},
+                );
+        }}
+
+        let groth16_proof = Groth16Proof {{
+            raw: groth16_proof_raw, public_inputs: public_inputs.span(),
+        }};
+
+        let [
+            poc_x_0,
+            poc_x_1,
+            poc_x_2,
+            poc_x_3,
+            poc_y_0,
+            poc_y_1,
+            poc_y_2,
+            poc_y_3,
+            pok_x_0,
+            pok_x_1,
+            pok_x_2,
+            pok_x_3,
+            pok_y_0,
+            pok_y_1,
+            pok_y_2,
+            pok_y_3,
+        ] =
+            serialized
+            .multi_pop_front::<16>()
+            .unwrap()
+            .unbox();
+        let proof_commitment = G1Point {{
+            x: downcast_u384(poc_x_0, poc_x_1, poc_x_2, poc_x_3),
+            y: downcast_u384(poc_y_0, poc_y_1, poc_y_2, poc_y_3),
+        }};
+        let proof_commitment_pok = G1Point {{
+            x: downcast_u384(pok_x_0, pok_x_1, pok_x_2, pok_x_3),
+            y: downcast_u384(pok_y_0, pok_y_1, pok_y_2, pok_y_3),
+        }};
+
+        let mpcheck_hint = deserialize_mpcheck_hint_bn254(ref serialized, 190);
+        let commitment_mpcheck_hint = deserialize_mpcheck_hint_bn254(ref serialized, 145);
+
+        let msm_hint = serialized;
+
+        return FullProofWithHints {{
+            groth16_proof,
+            proof_commitment,
+            proof_commitment_pok,
+            mpcheck_hint,
+            commitment_mpcheck_hint,
+            msm_hint,
+        }};
+    }}
+
+    pub fn deserialize_mpcheck_hint_bn254(
+        ref serialized: Span<felt252>, big_q_len: u32,
+    ) -> MPCheckHintBN254 {{
+        let lambda_root = _deserialize_E12D_u288(ref serialized);
+        let lambda_root_inverse = _deserialize_E12D_u288(ref serialized);
+
+        let [
+            w0_l0,
+            w0_l1,
+            w0_l2,
+            w2_l0,
+            w2_l1,
+            w2_l2,
+            w4_l0,
+            w4_l1,
+            w4_l2,
+            w6_l0,
+            w6_l1,
+            w6_l2,
+            w8_l0,
+            w8_l1,
+            w8_l2,
+            w10_l0,
+            w10_l1,
+            w10_l2,
+        ] =
+            (*serialized
+            .multi_pop_front::<18>()
+            .unwrap())
+            .unbox();
+
+        // full_len -= 18;
+        // assert(full_len == serialized.len(), 'F');
+
+        let w = MillerLoopResultScalingFactor {{
+            w0: downcast_u288(w0_l0, w0_l1, w0_l2),
+            w2: downcast_u288(w2_l0, w2_l1, w2_l2),
+            w4: downcast_u288(w4_l0, w4_l1, w4_l2),
+            w6: downcast_u288(w6_l0, w6_l1, w6_l2),
+            w8: downcast_u288(w8_l0, w8_l1, w8_l2),
+            w10: downcast_u288(w10_l0, w10_l1, w10_l2),
+        }};
+        // usize_assert_eq(mpcheck_hint.Ris.len(), 34);
+        // 34 * 12 * 3 = 1224
+        let mut ris_slice = serialized.slice(1, 1224);
+        // println!("ris_slice.len(): {{}}", ris_slice.len());
+
+        let end = serialized.len();
+        serialized = serialized.slice(1225, end - 1224 - 1);
+        // println!("serialized.len(): {{}}", serialized.len());
+        let mut Ris = array![];
+        while let Option::Some(ri) = ris_slice.multi_pop_front::<36>() {{
+            let [
+                w0l0,
+                w0l1,
+                w0l2,
+                w1l0,
+                w1l1,
+                w1l2,
+                w2l0,
+                w2l1,
+                w2l2,
+                w3l0,
+                w3l1,
+                w3l2,
+                w4l0,
+                w4l1,
+                w4l2,
+                w5l0,
+                w5l1,
+                w5l2,
+                w6l0,
+                w6l1,
+                w6l2,
+                w7l0,
+                w7l1,
+                w7l2,
+                w8l0,
+                w8l1,
+                w8l2,
+                w9l0,
+                w9l1,
+                w9l2,
+                w10l0,
+                w10l1,
+                w10l2,
+                w11l0,
+                w11l1,
+                w11l2,
+            ] =
+                (*ri)
+                .unbox();
+            Ris
+                .append(
+                    E12D {{
+                        w0: downcast_u288(w0l0, w0l1, w0l2),
+                        w1: downcast_u288(w1l0, w1l1, w1l2),
+                        w2: downcast_u288(w2l0, w2l1, w2l2),
+                        w3: downcast_u288(w3l0, w3l1, w3l2),
+                        w4: downcast_u288(w4l0, w4l1, w4l2),
+                        w5: downcast_u288(w5l0, w5l1, w5l2),
+                        w6: downcast_u288(w6l0, w6l1, w6l2),
+                        w7: downcast_u288(w7l0, w7l1, w7l2),
+                        w8: downcast_u288(w8l0, w8l1, w8l2),
+                        w9: downcast_u288(w9l0, w9l1, w9l2),
+                        w10: downcast_u288(w10l0, w10l1, w10l2),
+                        w11: downcast_u288(w11l0, w11l1, w11l2),
+                    }},
+                )
+        }}
+        // usize_assert_eq(mpcheck_hint.big_Q.len(), 190);
+        let mut big_q_slice = serialized.slice(1, big_q_len * 3);
+        let end = serialized.len();
+        serialized = serialized.slice(big_q_len * 3 + 1, end - big_q_len * 3 - 1);
+        let mut big_q = array![];
+        while let Option::Some(q) = big_q_slice.multi_pop_front::<3>() {{
+            let [l0, l1, l2] = (*q).unbox();
+            big_q.append(downcast_u288(l0, l1, l2))
+        }}
+
+        let z = (*serialized.pop_front().unwrap()).try_into().unwrap();
+
+        let mpcheck_hint = MPCheckHintBN254 {{
+            lambda_root: lambda_root,
+            lambda_root_inverse: lambda_root_inverse,
+            w: w,
+            Ris: Ris.span(),
+            big_Q: big_q,
+            z: z,
+        }};
+        return mpcheck_hint;
+    }}
+
 }}
 
 

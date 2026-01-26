@@ -289,6 +289,8 @@ class Groth16VerifyingKey:
                 for i, point in enumerate(self.ic)
             ],
         )
+        pedersen_g = G2PointCircuit.from_G2Point("pedersen_g", self.commitment_key_g)
+        pedersen_g_root_sigma_neg = G2PointCircuit.from_G2Point("pedersen_g_root_sigma_neg", self.commitment_key_g_root_sigma_neg)
         code = f"""
         pub const vk:Groth16VerifyingKey = Groth16VerifyingKey{{
             alpha_beta_miller_loop_result: {M.serialize(raw=True)},
@@ -297,6 +299,10 @@ class Groth16VerifyingKey:
         }};
 
         pub const ic: [G1Point; {len(self.ic)}] = {ic.serialize(raw=True, const=True)};
+
+        pub const pedersen_g: G2Point = {pedersen_g.serialize(raw = True)};
+
+        pub const pedersen_g_root_sigma_neg: G2Point = {pedersen_g_root_sigma_neg.serialize(raw = True)};
 
         """
         return code
