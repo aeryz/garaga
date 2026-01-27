@@ -35,7 +35,7 @@ def precompute_lines_from_vk(vk: Groth16VerifyingKey) -> StructArray:
 def precompute_lines_from_vk_groth16(vk: Groth16VerifyingKey) -> (StructArray, StructArray):
 
     # Precompute lines for fixed G2 points
-    lines = precompute_lines([vk.commitment_key_g, vk.commitment_key_g_root_sigma_neg])
+    lines = precompute_lines([vk.commitment_key_g_root_sigma_neg, vk.commitment_key_g])
     precomputed_lines = StructArray(
         name="lines",
         elmts=[
@@ -459,7 +459,9 @@ mod {contract_cairo_name} {{
                         .unwrap_syscall();
 
                     ec_safe_add(
-                        Serde::<G1Point>::deserialize(ref _vx_x_serialized).unwrap(), *ic.at(0), {curve_id.value}
+                        Serde::<G1Point>::deserialize(ref _vx_x_serialized).unwrap(),
+                        ec_safe_add(*ic.at(0), fph.proof_commitment, 0),
+                        0,
                     )
                 }}
             }};

@@ -38,25 +38,12 @@ def groth16_calldata_from_vk_and_proof(
     mpc_pok = MPCheckCalldataBuilder(
         vk.curve_id,
         pairs = [
-            G1G2Pair(p=proof.commitments[0], q=vk.commitment_key_g, curve_id=vk.curve_id),
-            G1G2Pair(p=proof.commitment_pok, q=vk.commitment_key_g_root_sigma_neg, curve_id=vk.curve_id),
+            G1G2Pair(p=proof.commitments[0], q=vk.commitment_key_g_root_sigma_neg, curve_id=vk.curve_id),
+            G1G2Pair(p=proof.commitment_pok, q=vk.commitment_key_g, curve_id=vk.curve_id),
         ],
         n_fixed_g2=2,
         public_pair=None
     )
-    # lines = mpc_pok.lines()
-    # precomputed_lines = StructArray(
-    #     name="lines",
-    #     elmts=[
-    #         G2Line(name=f"line{i}", elmts=lines[i : i + 4])
-    #         for i in range(0, len(lines), 4)
-    #     ],
-    # )
-    # constants_code = f"""
-    # pub const precomputed_lines: [G2Line; {len(precomputed_lines)//4}] = {precomputed_lines.serialize(raw=True, const=True)};
-    # """;
-    # print(constants_code)
-
 
     calldata.extend(proof.serialize_to_calldata())
     calldata.extend(io.bigint_split(proof.commitments[0].x))
